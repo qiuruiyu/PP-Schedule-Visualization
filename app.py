@@ -1068,10 +1068,19 @@ app.clientside_callback(
         
         contentDivs.forEach(div => {
             const strategy = div.id.replace("content-", "");
-            if (strategy === activeStrategy) {
-                div.style.display = "block";
-            } else {
-                div.style.display = "none";
+            const isActive = strategy === activeStrategy;
+            div.style.display = isActive ? "block" : "none";
+
+            if (isActive && window.Plotly) {
+                // 图表是在 display:none 的面板里初始化的，那时容器宽高为 0，
+                // plotly 会按错误的尺寸建立 像素<->数据坐标 的映射，面板显示
+                // 出来之后 hover 命中区域就整体错位。等这一帧的布局生效后
+                // 强制重算一次尺寸。
+                window.requestAnimationFrame(() => {
+                    div.querySelectorAll('.js-plotly-plot').forEach(gd => {
+                        window.Plotly.Plots.resize(gd);
+                    });
+                });
             }
         });
         

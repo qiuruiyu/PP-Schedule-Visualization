@@ -170,9 +170,24 @@ def create_pipeline_figure(
     y_spacing = 1.0  # Use 1.0 for no gaps
 
     # Batch processing for increased performance
-    shapes = []
+    # 每个算子渲染成一根水平 bar：bar 自带矩形命中区域，hover 在整块矩形内都有效。
+    # （早期实现用 layout.shapes 画矩形 + 矩形中心一个不可见 marker 提供 hover，
+    #  shapes 不参与 hover，marker 判定半径只有几像素，导致必须正对中心才出提示。）
     annotations = []
-    hover_traces = []
+    bar_base = []      # 每根 bar 的起始时间
+    bar_length = []    # 每根 bar 的长度（duration）
+    bar_center = []    # 每根 bar 在 y 轴上的中心
+    bar_width = []     # 每根 bar 在 y 轴上的厚度
+    bar_color = []
+    bar_hover = []
+
+    def add_bar(x0, duration, y_center, height, color, hover_text):
+        bar_base.append(x0)
+        bar_length.append(duration)
+        bar_center.append(y_center)
+        bar_width.append(height)
+        bar_color.append(color)
+        bar_hover.append(hover_text)
 
     # Add rectangles for each task
     for device_idx, device in enumerate(schedule_data):
@@ -201,19 +216,6 @@ def create_pipeline_figure(
                     f"Duration: {task['duration']:.2f}"
                 )
                 
-                # Add invisible marker for hover info
-                hover_traces.append(
-                    dict(
-                        x=[start_time + duration / 2],
-                        y=[y_pos],
-                        mode="markers",
-                        marker=dict(opacity=0),  # Invisible marker
-                        hoverinfo="text",
-                        text=hover_text,
-                        showlegend=False,
-                    )
-                )
-                
                 # Calculate height of each sub-operation
                 sub_height = 1.0 / len(task["operations"])
                 
@@ -227,18 +229,16 @@ def create_pipeline_figure(
                     sub_y_pos_top = sub_y_pos_bottom + sub_height
                     sub_y_center = (sub_y_pos_bottom + sub_y_pos_top) / 2
                     
-                    # Add rectangle for this sub-operation
-                    shapes.append(
-                        dict(
-                            type="rect",
-                            x0=start_time,
-                            y0=sub_y_pos_bottom,
-                            x1=start_time + duration,
-                            y1=sub_y_pos_top,
-                            line=dict(color="black", width=0.5),
-                            fillcolor=color,
-                            layer="above",
-                        )
+                    # Add rectangle for this sub-operation.
+                    # 每个子块都挂上整块 overlapped 的 hover 文本，
+                    # 这样鼠标落在上下任意一半都能看到完整信息。
+                    add_bar(
+                        start_time,
+                        duration,
+                        sub_y_center,
+                        sub_height,
+                        color,
+                        hover_text,
                     )
                     
                     # Add batch number text for this sub-operation only if show_text_labels is True
@@ -282,20 +282,6 @@ def create_pipeline_figure(
                     text_color = "black"
                     name = "Unknown"
 
-                # Add rectangle for the task
-                shapes.append(
-                    dict(
-                        type="rect",
-                        x0=start_time,
-                        y0=y_pos - 0.5,
-                        x1=start_time + duration,
-                        y1=y_pos + 0.5,
-                        line=dict(color="black", width=0.5),
-                        fillcolor=color,
-                        layer="above",
-                    )
-                )
-
                 # Add batch number text only if show_text_labels is True
                 if show_text_labels:
                     annotations.append(
@@ -318,32 +304,36 @@ def create_pipeline_figure(
                     f"Duration: {task['duration']:.2f}"
                 )
 
-                hover_traces.append(
-                    dict(
-                        x=[start_time + duration / 2],
-                        y=[y_pos],
-                        mode="markers",
-                        marker=dict(opacity=0),  # Invisible marker
-                        hoverinfo="text",
-                        text=hover_text,
-                        showlegend=False,
-                    )
-                )
+                # Add rectangle for the task
+                add_bar(start_time, duration, y_pos, 1.0, color, hover_text)
 
             # Update progress
             if show_progress:
                 tasks_processed += 1
                 progress_bar.update(1)
 
-    # Add all shapes at once for better performance
-    fig.update_layout(shapes=shapes)
-
     # Add all annotations at once
     fig.update_layout(annotations=annotations)
 
-    # Add all hover traces at once
-    for trace in hover_traces:
-        fig.add_trace(go.Scatter(**trace))
+    # 所有算子矩形合并成一条 Bar trace：hover 命中区域覆盖整块矩形，
+    # 并且 trace 数量与算子数解耦（此前每个算子一条 trace，大规模调度下会有上千条）。
+    if bar_base:
+        fig.add_trace(
+            go.Bar(
+                orientation="h",
+                base=bar_base,
+                x=bar_length,
+                y=bar_center,
+                width=bar_width,
+                marker=dict(
+                    color=bar_color,
+                    line=dict(color="black", width=0.5),
+                ),
+                hovertext=bar_hover,
+                hoverinfo="text",
+                showlegend=False,
+            )
+        )
 
     # Add custom legend
     legend_items = []
@@ -442,6 +432,9 @@ def create_pipeline_figure(
             ticktext=device_labels,
             showgrid=False,
             zeroline=False,
+            # 矩形恰好占满 [-0.5, num_devices-0.5]，留一点余量，
+            # 否则最上/最下两行矩形的描边会被画布边缘裁掉。
+            range=[-0.5 - 0.02, (num_devices - 1) + 0.5 + 0.02],
         ),
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor="white",
@@ -464,6 +457,18 @@ def create_pipeline_figure(
         ),
         bargap=0,
         bargroupgap=0,
+        # bar 的位置完全由 base/width 手工指定，必须用 overlay，
+        # 否则 plotly 会按同一 y 值分组或堆叠，矩形位置会整体偏移。
+        barmode="overlay",
+        # 显式固定 hover 行为：跟随鼠标所在的那一块，标签紧贴光标。
+        hovermode="closest",
+        hoverdistance=1,
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="#999",
+            font=dict(family="Arial", size=12, color="black"),
+            align="left",
+        ),
     )
 
     if show_progress:

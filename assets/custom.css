@@ -135,6 +135,17 @@ body {
     transition: all 0.3s ease;
 }
 
+/* Plotly 通过直接改写 SVG 的 transform 来定位 hover 提示框和图元。
+   上面的 `*` 通配规则会把过渡动画加到这些内部元素上，于是 hover 提示框
+   会从上一个位置（首次是原点，即左上角）一路滑过来，动画期间还停在错误的
+   坐标上。图表子树内必须关闭过渡。 */
+.js-plotly-plot,
+.js-plotly-plot *,
+.dash-graph,
+.dash-graph * {
+    transition: none !important;
+}
+
 /* Enhanced card hover effects */
 .card {
     border-radius: 12px !important;
