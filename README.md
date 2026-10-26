@@ -2,13 +2,7 @@
 
 This project provides tools for emulating and visualizing pipeline parallelism strategies used in large language model training.
 
-## Online Demo
-
-**Try it online!** This tool is deployed and accessible on Hugging Face Spaces:
-
-🔗 **[https://huggingface.co/spaces/Victarry/PP-schedule-visualizer](https://huggingface.co/spaces/Victarry/PP-schedule-visualizer)**
-
-No installation required - just visit the link and start exploring pipeline parallelism scheduling strategies directly in your browser!
+It computes operation start and end times from scheduling dependencies and the supplied compute and communication timings. The results are simulations, not measurements from a training run.
 
 ## Overview
 
@@ -24,12 +18,15 @@ Pipeline parallelism is a technique used to train large models by partitioning t
   - 1F1B (One-Forward-One-Backward)
   - Interleaved 1F1B
   - Zero-Bubble 1F1B (ZB-1P)
-  - 1F1B with computation-communication overlap
-  - Interleaved 1F1B with computation-communication overlap
+  - 1F1B with overlapped forward and backward computation
+  - Interleaved 1F1B with overlapped forward and backward computation
   - DualPipe (Bidirectional pipeline parallelism with full forward-backward overlap)
+  - DualPipeV (Virtual stages with zero-bubble backward scheduling)
 
 - **Visualization**:
   - Interactive visualization dashboard using Plotly/Dash
+  - Multiple strategy selection, tabs with a shared time scale, and total execution time comparison
+  - Hover details for each operation: microbatch, stage, type, start, end, and duration
   
 - **Configuration**:
   - Configurable simulation parameters through Hydra
@@ -37,12 +34,14 @@ Pipeline parallelism is a technique used to train large models by partitioning t
 
 ## Installation
 
-This project uses [uv](https://github.com/astral-sh/uv) for dependency management.
+This project requires Python 3.10 or newer and uses [uv](https://github.com/astral-sh/uv) for dependency management.
 
-Setup `uv` if not installed on your computer:
+Install uv using its [installation instructions](https://docs.astral.sh/uv/getting-started/installation/), then clone this repository:
+
 ```bash
-# On macOS and Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/qiuruiyu/PP-Schedule-Visualization.git
+cd PP-Schedule-Visualization
+uv sync
 ```
 
 
@@ -54,11 +53,47 @@ To visualize schedules interactively:
 uv run app.py
 ```
 
-This will start a Dash server (usually on `http://127.0.0.1:8050/`). Open this URL in your web browser.
+Open `http://127.0.0.1:7860/` in your browser. The web app listens on `0.0.0.0:7860`.
 
-You can then adjust parameters like the number of devices, stages, batches, operation times, and select different scheduling strategies to see the resulting pipeline visualization.
+1. Set the device count, total stage count, and number of microbatches. Microbatch count means the number of small batches, not the number of samples in each batch.
+2. Enter P2P latency and operation timings in milliseconds.
+3. Select one or more strategy cards, then click **Generate Schedules**. Click it again after changing parameters or strategies.
+4. Switch between the result tabs and compare total execution times below the chart. **Relative Efficiency** is the shortest time among the selected strategies divided by each strategy's time; it is not GPU utilization.
+
+### Web Timing Inputs
+
+The web UI treats compute timings as the total work assigned to one device for one microbatch. It divides these timings by the number of stages per device before simulation. For example, with 4 devices and 8 interleaved stages, forward = 1 ms and backward = 2 ms become 0.5 ms and 1 ms per stage. P2P latency is not divided.
+
+Under **Customize Per-Stage Timing**, individual forward and backward entries override the corresponding global values; empty entries use the global value. These entries use the same scaling as the global timings. For strategies with split backward computation, the global **Backward D** and **Backward W** values determine backward timings.
+
+Under **Advanced Timing Options**:
+
+- **Backward D / Backward W** specify input-gradient and weight-gradient computation times. Both are required for ZB-1P, DualPipe, and DualPipeV. When comparing against ordinary backward computation, keep their sum equal to the combined backward time.
+- **Overlapped Forward+Backward Time** specifies the combined duration of an overlapping block. If left empty, the simulator uses the sum of its component operation times.
+- **Microbatch Group Size per VP Stage** controls interleave grouping; leaving it empty uses the device count.
+
+### Stage Counts
+
+| Web strategy | Stage count used by the web UI |
+| --- | --- |
+| 1F1B, ZB-1P, 1F1B Overlap | Equal to the device count; adjusted automatically |
+| 1F1B Interleave, 1F1B Interleave + Overlap | Must be divisible by the device count |
+| DualPipe | Equal to the device count; adjusted automatically; requires an even device count |
+| DualPipeV | Twice the device count; adjusted automatically; requires an even device count |
+
+The UI displays a notification when it adjusts stage counts or scales timings. A strategy may also impose constraints on microbatch count; any simulation error is shown in a notification.
+
+For a first comparison, use 4 devices, 8 stages, 8 microbatches, P2P = 0 ms, forward = 1 ms, and backward = 2 ms. Select **1F1B** and **1F1B Interleave**. Their total times are 33 ms and 28.5 ms respectively; the UI uses 4 stages for 1F1B and 8 for Interleave.
 
 ## Running from Command Line
+
+`main.py` runs a single strategy and opens its Dash visualization. Its default port is **8050**, set by `visualization_port` in `conf/config.yaml`.
+
+Unlike the web UI, CLI operation timings are **per stage** and are passed directly to the simulator. The CLI does not automatically adjust stage counts or divide timings by stages per device. To reproduce the web comparison above for Interleave, use:
+
+```bash
+uv run python main.py strategy=interleave num_devices=4 num_stages=8 num_batches=8 op_times.forward=0.5 op_times.backward=1.0
+```
 
 ### Running for 1F1B strategy:
 ```bash
@@ -72,7 +107,7 @@ uv run python main.py strategy=interleave num_devices=4 num_stages=8 num_batches
 ```
 ![interleave](assets/interleave_1f1b.png)
 
-You can optionally setting `microbatch_group_size_per_vp_stage`.
+You can optionally set `microbatch_group_size_per_vp_stage` for the `interleave` strategy.
 
 ### Running for ZB-1P strategy:
 ```bash
@@ -132,7 +167,7 @@ You can use different configuration files with Hydra in several ways:
    ```
    conf/
    ├── config.yaml     # Default configuration
-   └── model_A.yaml    # Create your own config with stage-specific latency for performance projection
+   └── model_A.yaml    # Example configuration with stage-specific timings
    ```
 
 2. Run with your desired configuration using the `--config-name` flag:
@@ -144,7 +179,9 @@ You can use different configuration files with Hydra in several ways:
 ## Project Structure
 
 ```
-PP-Emulation/
+PP-Schedule-Visualization/
+├── app.py                  # Multi-strategy web UI (port 7860)
+├── assets/                 # CSS, client-side interactions, and screenshots
 ├── conf/                   # Hydra configuration files
 │   └── config.yaml         # Default configuration
 ├── src/                    # Source code
@@ -152,10 +189,31 @@ PP-Emulation/
 │   ├── execution_model.py  # Schedule execution models
 │   ├── strategies.py       # Pipeline parallelism strategies
 │   └── visualizer.py       # Visualization utilities
-├── main.py                 # Main entry point
+├── main.py                 # Single-strategy CLI and visualization
+├── tests/                  # Simulator and web callback tests
+├── examples/               # Plotting examples, including Megatron-LM timer data
+├── formula.py              # Analytical timing checks against simulation
 ├── pyproject.toml          # Project metadata and dependencies
 └── README.md               # This file
 ```
+
+## Development
+
+Run the tests with the development dependencies:
+
+```bash
+uv run --extra dev python -m pytest tests/ -q
+```
+
+To compare analytical timing formulas with simulation results:
+
+```bash
+uv run python formula.py
+```
+
+Dependencies are maintained in `pyproject.toml`; `requirements.txt` is used by the Docker deployment. Update both when changing dependencies. The deployment entry point is `app:server`, listening on port 7860 through Gunicorn.
+
+For plotting timers collected from a real Megatron-LM run, see [examples/megatron-lm/README.md](examples/megatron-lm/README.md).
 
 ## References
 
@@ -170,4 +228,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. 
+Contributions are welcome! Please feel free to submit a Pull Request.

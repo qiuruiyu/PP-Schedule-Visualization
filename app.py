@@ -430,16 +430,25 @@ app.layout = html.Div([
                     ], className="list-unstyled")
                 ], md=4),
                 dbc.Col([
-                    html.H6("Resources", className="text-muted mb-3"),
+                    html.H6("Source & Credits", className="text-muted mb-3"),
+                    html.P(
+                        "Forked from Victarry's project and modified by qiuruiyu.",
+                        className="small text-muted",
+                    ),
                     html.Div([
                         html.A([
                             html.I(className="bi bi-github me-2"),
-                            "View on GitHub"
-                        ], href="https://github.com/Victarry/PP-Schedule-Visualization", className="small text-muted d-block mb-2"),
+                            "This Fork on GitHub"
+                        ], href="https://github.com/qiuruiyu/PP-Schedule-Visualization", className="small text-muted d-block mb-2"),
+                        html.A(
+                            "Original Project by Victarry",
+                            href="https://github.com/Victarry/PP-Schedule-Visualization",
+                            className="small text-muted d-block mb-2",
+                        ),
                         html.A([
                             html.I(className="bi bi-question-circle me-2"),
                             "Report an Issue"
-                        ], href="https://github.com/Victarry/PP-Schedule-Visualization/issues", className="small text-muted d-block")
+                        ], href="https://github.com/qiuruiyu/PP-Schedule-Visualization/issues", className="small text-muted d-block")
                     ])
                 ], md=4)
             ]),
